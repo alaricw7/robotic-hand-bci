@@ -1,0 +1,7 @@
+[args]
+data_dir = "data/processed/pythondata1"
+checkpoint_dir = "model/10fold_npz/experiments/pythondata1_npz_repr/representation/checkpoints"
+montage = "assets/montages/Standard-10-5-Cap385_witheog.elp"
+out_dir = "artifacts/analysis/representation/spatial_filters"
+subjects = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+batch_size = 64

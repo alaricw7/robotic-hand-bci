@@ -1,0 +1,37 @@
+[paths]
+base_path = "data/raw/EEG"
+save_path = "data/processed/pythondata1"
+montage_path = "assets/montages/Standard-10-5-Cap385_witheog.elp"
+
+[subjects]
+ids = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10"]
+
+[channel_handling]
+drop_channels = ["ECG", "HEOR", "HEOL", "VEOU", "VEOL"]
+
+[events]
+stim_codes = [11, 12, 13, 14, 15, 16]
+event_is_mi_cue = true
+trial_to_mi_offset_sec = 2.0
+
+[filtering]
+sfreq = 250.0
+l_freq = 0.5
+h_freq = 45.0
+
+[epoch]
+tmin = -0.5
+tmax = 4.0
+baseline = [-0.5, 0.0]
+
+[rejection]
+enabled = false
+abs_threshold_uv = 150.0
+ptp_threshold_uv = 250.0
+flat_std_threshold_uv = 0.5
+max_bad_channel_fraction = 0.10
+
+[saving]
+save_fif = true
+save_npz = true
+save_eeglab_set = true

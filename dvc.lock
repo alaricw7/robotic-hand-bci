@@ -1,0 +1,74 @@
+schema: '2.0'
+stages:
+  prepare_eegnet_noica:
+    cmd: uv run rhbci run prepare-eegnet-noica --config 
+      configs/preprocessing/eegnet_noica.toml
+    deps:
+    - path: assets/montages/Standard-10-5-Cap385_witheog.elp
+      hash: md5
+      md5: 4e113496315f318fe6afe7a5ce98f140
+      size: 15666
+    - path: configs/preprocessing/eegnet_noica.toml
+      hash: md5
+      md5: 3a5bdee710b86fd9e0d5526fed743ccf
+      size: 711
+    - path: data/raw/EEG
+      hash: md5
+      md5: 8630a605aadb9b4e6407c8bae91c68be.dir
+      size: 11395726618
+      nfiles: 37
+    - path: pyproject.toml
+      hash: md5
+      md5: 6ef432415451fca50b22c4874671fa67
+      size: 808
+    - path: src/robotic_hand_bci
+      hash: md5
+      md5: e077833b93fc9de41c1708b2d04e925e.dir
+      size: 585832
+      nfiles: 55
+    - path: uv.lock
+      hash: md5
+      md5: 40b9421b0087a4d5f4ce5c2b2ffd035a
+      size: 424079
+    outs:
+    - path: data/processed/pythondata1
+      hash: md5
+      md5: b6afed5ade0833c8b158d6b920e77aab.dir
+      size: 6312987497
+      nfiles: 150
+  detect_marker_and_rest:
+    cmd: uv run rhbci run detect-marker-and-rest --config 
+      configs/preprocessing/eegnet_noica.toml
+    deps:
+    - path: assets/montages/Standard-10-5-Cap385_witheog.elp
+      hash: md5
+      md5: 4e113496315f318fe6afe7a5ce98f140
+      size: 15666
+    - path: configs/preprocessing/eegnet_noica.toml
+      hash: md5
+      md5: 3a5bdee710b86fd9e0d5526fed743ccf
+      size: 711
+    - path: data/raw/EEG
+      hash: md5
+      md5: 8630a605aadb9b4e6407c8bae91c68be.dir
+      size: 11395726618
+      nfiles: 37
+    - path: pyproject.toml
+      hash: md5
+      md5: 6ef432415451fca50b22c4874671fa67
+      size: 808
+    - path: src/robotic_hand_bci
+      hash: md5
+      md5: e077833b93fc9de41c1708b2d04e925e.dir
+      size: 585832
+      nfiles: 55
+    - path: uv.lock
+      hash: md5
+      md5: 40b9421b0087a4d5f4ce5c2b2ffd035a
+      size: 424079
+    outs:
+    - path: artifacts/marker_analysis
+      hash: md5
+      md5: a793dbcbfee83acb0a9913d4fc466d38.dir
+      size: 245669
+      nfiles: 2

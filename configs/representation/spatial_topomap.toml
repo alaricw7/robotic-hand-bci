@@ -1,0 +1,25 @@
+[args]
+subjects = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10"]
+data_template = "data/processed/pythondata2/{subject}/{subject}_EEGNet_ICA_uV.npz"
+checkpoint_template = "model/10fold_npz/experiments/pythondata2_npz_repr/representation/checkpoints/{subject}_eegnet_ica.pt"
+montage = "assets/montages/Standard-10-5-Cap385_witheog.elp"
+out_dir = "artifacts/analysis/representation/spatial_topomap_pythondata2"
+fold = 0
+n_splits = 5
+seed = 42
+batch_size = 128
+sfreq = 250.0
+epoch_tmin = -0.5
+window_start = 0.0
+window_end = 1.5
+block1_pool_factor = 4.0
+n_classes = 6
+n_channels = 59
+n_samples = 1126
+n_temporal_filters = 16
+depth_multiplier = 2
+temporal_kernel = 64
+separable_kernel = 16
+dropout = 0.5
+model_class = "EEGNet"
+spatial_layer = "auto"

@@ -1,0 +1,8 @@
+[args]
+data_dir = "data/processed/pythondata1"
+out_dir = "artifacts/analysis/representation/topography_physionet"
+montage = "assets/montages/Standard-10-5-Cap385_witheog.elp"
+subjects = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10"]
+class_names = ["Manipulation", "ColorClass", "ColorTrack", "Face", "RPS", "Gesture"]
+sfreq = 250.0
+dpi = 200

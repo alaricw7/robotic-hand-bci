@@ -1,0 +1,3 @@
+[args]
+out_root = "artifacts/analysis/representation/spatial_filters_grid"
+montage = "assets/montages/Standard-10-5-Cap385_witheog.elp"

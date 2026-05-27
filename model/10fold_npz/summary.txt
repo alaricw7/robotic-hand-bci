@@ -1,0 +1,11 @@
+Experiment: smoke_uv_10fold_s1
+Model: baseline
+CV: subject-dependent stratified 2-fold
+Validation: stratified random val_size from train_val
+Metric: final test set, checkpoint selected by val kappa
+Val size: 0.15
+Data root: /home/wong/robotic-hand-bci/data/processed/pythondata1
+================================================================================
+Subject   Acc               Kappa             T1      T2      T3      T4      T5      T6      
+--------------------------------------------------------------------------------
+S1        0.2379±0.0160  0.0859±0.0192  0.1602  0.4811  0.0933  0.3087  0.1887  0.1981  

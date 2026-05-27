@@ -1,0 +1,105 @@
+stages:
+  prepare_eegnet_noica:
+    cmd: uv run rhbci run prepare-eegnet-noica --config configs/preprocessing/eegnet_noica.toml
+    deps:
+      - assets/montages/Standard-10-5-Cap385_witheog.elp
+      - configs/preprocessing/eegnet_noica.toml
+      - data/raw/EEG
+      - pyproject.toml
+      - src/robotic_hand_bci
+      - uv.lock
+    outs:
+      - data/processed/pythondata1
+
+  detect_marker_and_rest:
+    cmd: uv run rhbci run detect-marker-and-rest --config configs/preprocessing/eegnet_noica.toml
+    deps:
+      - assets/montages/Standard-10-5-Cap385_witheog.elp
+      - configs/preprocessing/eegnet_noica.toml
+      - data/raw/EEG
+      - pyproject.toml
+      - src/robotic_hand_bci
+      - uv.lock
+    outs:
+      - artifacts/marker_analysis:
+          cache: false
+
+  repr_tsne_rdm:
+    cmd: uv run rhbci run repr-tsne-rdm --config configs/representation/tsne_rdm.toml
+    deps:
+      - configs/representation/tsne_rdm.toml
+      - data/processed/pythondata1
+      - model/10fold_npz/experiments/pythondata1_npz_repr/representation/checkpoints
+      - pyproject.toml
+      - src/robotic_hand_bci
+      - uv.lock
+    outs:
+      - artifacts/analysis/representation/tsne_rdm:
+          cache: false
+
+  repr_tsne_rdm_block:
+    cmd: uv run rhbci run repr-tsne-rdm-block --config configs/representation/tsne_rdm_block.toml
+    deps:
+      - configs/representation/tsne_rdm_block.toml
+      - data/processed/pythondata1
+      - model/10fold_npz/experiments/pythondata1_npz_repr/representation/checkpoints
+      - pyproject.toml
+      - src/robotic_hand_bci
+      - uv.lock
+    outs:
+      - artifacts/analysis/representation/tsne_rdm_block:
+          cache: false
+
+  repr_multifeature_rsa:
+    cmd: uv run rhbci run repr-multifeature-rsa --config configs/representation/multifeature_rsa.toml
+    deps:
+      - assets/montages/Standard-10-5-Cap385_witheog.elp
+      - configs/representation/multifeature_rsa.toml
+      - data/processed/pythondata1
+      - model/10fold_npz/experiments/pythondata1_npz_repr/representation/checkpoints
+      - pyproject.toml
+      - src/robotic_hand_bci
+      - uv.lock
+    outs:
+      - artifacts/analysis/representation/rsa:
+          cache: false
+
+  repr_topography_physionet:
+    cmd: uv run rhbci run repr-topography-physionet --config configs/representation/topography_physionet.toml
+    deps:
+      - assets/montages/Standard-10-5-Cap385_witheog.elp
+      - configs/representation/topography_physionet.toml
+      - data/processed/pythondata1
+      - pyproject.toml
+      - src/robotic_hand_bci
+      - uv.lock
+    outs:
+      - artifacts/analysis/representation/topography_physionet:
+          cache: false
+
+  repr_spatial_filters:
+    cmd: uv run rhbci run repr-spatial-filters --config configs/representation/spatial_filters.toml
+    deps:
+      - assets/montages/Standard-10-5-Cap385_witheog.elp
+      - configs/representation/spatial_filters.toml
+      - data/processed/pythondata1
+      - model/10fold_npz/experiments/pythondata1_npz_repr/representation/checkpoints
+      - pyproject.toml
+      - src/robotic_hand_bci
+      - uv.lock
+    outs:
+      - artifacts/analysis/representation/spatial_filters:
+          cache: false
+
+  repr_refix_filter_grid:
+    cmd: uv run rhbci run repr-refix-filter-grid --config configs/representation/refix_filter_grid.toml
+    deps:
+      - assets/montages/Standard-10-5-Cap385_witheog.elp
+      - artifacts/analysis/representation/spatial_filters
+      - configs/representation/refix_filter_grid.toml
+      - pyproject.toml
+      - src/robotic_hand_bci
+      - uv.lock
+    outs:
+      - artifacts/analysis/representation/spatial_filters_grid:
+          cache: false

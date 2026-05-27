@@ -1,0 +1,11 @@
+Experiment: smoke_uv_loso_s1
+Model: baseline
+CV: loso
+Validation: per-class chronological last val_size within each train subject
+Metric: held-out subject test set, checkpoint selected by val kappa
+Val size: 0.1
+Data root: /home/wong/robotic-hand-bci/data/processed/pythondata1
+================================================================================
+Subject   Acc               Kappa             T1      T2      T3      T4      T5      T6      
+--------------------------------------------------------------------------------
+S1        0.2864±0.0000  0.1437±0.0000  0.2523  0.6132  0.3271  0.2243  0.2170  0.0849  

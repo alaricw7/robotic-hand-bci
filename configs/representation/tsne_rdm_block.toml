@@ -1,0 +1,16 @@
+[args]
+subjects = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10"]
+data_template = "data/processed/pythondata1/{subject}/{subject}_EEGNet_NoICA_uV.npz"
+checkpoint_template = "model/10fold_npz/experiments/pythondata1_npz_repr/representation/checkpoints/{subject}_eegnet_noica.pt"
+out_dir = "artifacts/analysis/representation/tsne_rdm_block"
+fold = 0
+n_splits = 5
+seed = 42
+batch_size = 128
+n_classes = 6
+n_channels = 59
+n_samples = 1126
+perplexity = 30.0
+tsne_iter = 1000
+model_class = "EEGNet"
+embedding_layer = "classifier"
