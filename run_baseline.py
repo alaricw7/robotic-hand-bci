@@ -1,14 +1,14 @@
-"""Aug-aware n-fold runner for TriDomain.
+"""Baseline n-fold runner for TriDomain.
 
-Same protocol as run_ablation_5fold.py (stratified KFold, val_size,
-val-kappa checkpoint selection, per-fold seed) plus:
-  - configurable training augmentations (augment.py)
-  - optional mixup at batch level
-  - optional crop_voting test protocol
+Protocol:
+  - stratified KFold test split
+  - stratified validation split from train_val
+  - validation-kappa checkpoint selection
+  - optional mixup used by the T7 + SWA baseline
 
 Inputs:
-  --aug-config path/to/aug.json     (merges into augment.DEFAULT_AUG)
-  --override key=value [...]        (key from augment.DEFAULT_AUG, parsed as python literal)
+  --augmentation-config path/to/config.json
+  --override key=value [...]
 
 Outputs:
   results_root/<exp_name>/summary.txt + results.json
@@ -31,14 +31,14 @@ import torch.nn as nn
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
-from ablation_config import ABLATION_PRESETS, TRI_DEFAULTS  # noqa: E402
-from augment import (  # noqa: E402
-    DEFAULT_AUG,
+from augmentation import (  # noqa: E402
+    DEFAULT_AUGMENTATION,
     MixUp,
     crop_vote_logits,
     make_eval_loader,
     make_train_loader,
 )
+from baseline_config import BASELINE_PRESET_NAME, BASELINE_PRESETS, TRI_DEFAULTS  # noqa: E402
 from configs import get_config  # noqa: E402
 from data import (  # noqa: E402
     DATA_ROOT,
@@ -50,11 +50,16 @@ from data import (  # noqa: E402
 from formatter import format_summary  # noqa: E402
 from metrics import compute_metrics  # noqa: E402
 from model import build_model  # noqa: E402
-from train import get_branch_decorr_loss, get_device, sample_branch_drop_mask, set_seed  # noqa: E402
+from train import (  # noqa: E402
+    get_branch_decorr_loss,
+    get_device,
+    sample_branch_drop_mask,
+    set_seed,
+)
 
 
-MODEL_NAME = "tridomain_aug"
-DEFAULT_ABLATION = "full_std_coords"
+MODEL_NAME = "tridomain_baseline"
+DEFAULT_PRESET = BASELINE_PRESET_NAME
 
 
 def parse_subjects(value):
@@ -74,8 +79,8 @@ def parse_subjects(value):
     return subjects
 
 
-def load_aug_config(path, overrides):
-    cfg = dict(DEFAULT_AUG)
+def load_augmentation_config(path, overrides):
+    cfg = dict(DEFAULT_AUGMENTATION)
     if path:
         with open(path) as f:
             user = json.load(f)
@@ -94,9 +99,9 @@ def load_aug_config(path, overrides):
     return cfg
 
 
-def build_tri_cfg(n_channels, n_times, n_classes, ablation_name, seed, tri_overrides=None):
+def build_tri_cfg(n_channels, n_times, n_classes, preset_name, seed, tri_overrides=None):
     values = dict(TRI_DEFAULTS)
-    values.update(ABLATION_PRESETS[ablation_name])
+    values.update(BASELINE_PRESETS[preset_name])
     if tri_overrides:
         values.update(tri_overrides)
     values.update({"random_seed": seed, "n_channels": n_channels,
@@ -143,7 +148,9 @@ def _train_epoch(model, loader, optim, n_classes, device, mixup, aux_loss_weight
         if mixup is not None:
             X, y_soft = mixup(X, y, n_classes)
         else:
-            y_soft = torch.zeros(y.size(0), n_classes, device=device).scatter_(1, y.view(-1, 1), 1.0)
+            y_soft = torch.zeros(y.size(0), n_classes, device=device).scatter_(
+                1, y.view(-1, 1), 1.0
+            )
         optim.zero_grad()
         branch_drop_mask = sample_branch_drop_mask(model, X.size(0), X.device, X.dtype)
         if use_aux:
@@ -246,7 +253,7 @@ def fit_one_fold(model, train_loader, val_loader, n_classes, train_cfg, device, 
     return float(best_val_kappa), int(best_epoch)
 
 
-def run_one_subject(subject, train_cfg, aug_cfg, args, device):
+def run_one_subject(subject, train_cfg, augmentation_cfg, args, device):
     X, y = load_subject(subject)
     n_classes = int(y.max() + 1)
     n_channels, n_times = X.shape[1], X.shape[2]
@@ -259,16 +266,24 @@ def run_one_subject(subject, train_cfg, aug_cfg, args, device):
         y_tr, y_va, y_te = y[tr_idx], y[va_idx], y[te_idx]
         X_tr, X_va, X_te = standardize_per_channel(X_tr_raw, X_va_raw, X_te_raw)
 
-        train_loader = make_train_loader(X_tr, y_tr, train_cfg["batch_size"], aug_cfg,
+        train_loader = make_train_loader(X_tr, y_tr, train_cfg["batch_size"], augmentation_cfg,
                                          num_workers=args.num_workers)
-        val_loader = make_eval_loader(X_va, y_va, train_cfg["batch_size"], num_workers=args.num_workers)
-        test_loader = make_eval_loader(X_te, y_te, train_cfg["batch_size"], num_workers=args.num_workers)
+        val_loader = make_eval_loader(
+            X_va, y_va, train_cfg["batch_size"], num_workers=args.num_workers
+        )
+        test_loader = make_eval_loader(
+            X_te, y_te, train_cfg["batch_size"], num_workers=args.num_workers
+        )
 
         set_seed(args.seed + fold_idx - 1)
-        cfg_tri = build_tri_cfg(n_channels, n_times, n_classes, args.ablation, args.seed,
+        cfg_tri = build_tri_cfg(n_channels, n_times, n_classes, args.preset, args.seed,
                                 tri_overrides=args._tri_overrides)
         model = build_model(cfg_tri, model_name="tridomain").to(device)
-        mixup = MixUp(aug_cfg["mixup_alpha"]) if aug_cfg.get("mixup_enabled", False) else None
+        mixup = (
+            MixUp(augmentation_cfg["mixup_alpha"])
+            if augmentation_cfg.get("mixup_enabled", False)
+            else None
+        )
 
         aux_loss_weight = float(
             args._tri_overrides.get("aux_loss_weight", 0.0)
@@ -286,7 +301,7 @@ def run_one_subject(subject, train_cfg, aug_cfg, args, device):
         if getattr(args, "_ckpt_dir", None) is not None:
             save_ckpt_path = str(Path(args._ckpt_dir) / subject / f"fold{fold_idx}.pt")
         save_meta = {
-            "ablation": args.ablation,
+            "preset": args.preset,
             "tri_overrides": dict(args._tri_overrides or {}),
             "seed": args.seed,
         }
@@ -310,9 +325,9 @@ def run_one_subject(subject, train_cfg, aug_cfg, args, device):
             )
 
         # Test under chosen protocol
-        proto = aug_cfg.get("test_protocol", "full_trial")
-        if proto == "crop_voting" and aug_cfg.get("crop_enabled", False):
-            y_pred, _ = crop_vote_logits(model, X_te, aug_cfg, device,
+        proto = augmentation_cfg.get("test_protocol", "full_trial")
+        if proto == "crop_voting" and augmentation_cfg.get("crop_enabled", False):
+            y_pred, _ = crop_vote_logits(model, X_te, augmentation_cfg, device,
                                          batch_size=train_cfg["batch_size"])
             y_true = y_te
         else:
@@ -327,7 +342,11 @@ def run_one_subject(subject, train_cfg, aug_cfg, args, device):
             "per_class": test_per_class.tolist(),
             "best_val_kappa": best_val_kappa,
             "best_epoch": best_epoch,
-            "counts": {"train": int(len(tr_idx)), "val": int(len(va_idx)), "test": int(len(te_idx))},
+            "counts": {
+                "train": int(len(tr_idx)),
+                "val": int(len(va_idx)),
+                "test": int(len(te_idx)),
+            },
         })
         print(f"  {subject} fold{fold_idx}/{args.n_folds}: "
               f"acc={test_acc:.4f} kappa={test_kappa:.4f} "
@@ -350,13 +369,13 @@ def run_one_subject(subject, train_cfg, aug_cfg, args, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp-name", default="aug_run")
-    parser.add_argument("--ablation", default=DEFAULT_ABLATION,
-                        choices=sorted(ABLATION_PRESETS))
-    parser.add_argument("--aug-config", default=None,
-                        help="JSON file overriding augment.DEFAULT_AUG")
+    parser.add_argument("--exp-name", default="baseline")
+    parser.add_argument("--preset", default=DEFAULT_PRESET,
+                        choices=sorted(BASELINE_PRESETS))
+    parser.add_argument("--augmentation-config", default=None,
+                        help="JSON file overriding augmentation.DEFAULT_AUGMENTATION")
     parser.add_argument("--override", nargs="*", default=None,
-                        help="key=value pairs for aug cfg (python literals)")
+                        help="key=value pairs for augmentation cfg (python literals)")
     parser.add_argument("--tri-override", nargs="*", default=None,
                         help="key=value pairs for TRI_DEFAULTS / dropout (python literals)")
     parser.add_argument("--save-ckpts", action="store_true",
@@ -376,7 +395,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None)
     parser.add_argument("--torch-threads", type=int, default=None)
-    parser.add_argument("--results-root", default=str(THIS_DIR / "results" / "aug_hpo"))
+    parser.add_argument("--results-root", default=str(THIS_DIR / "results" / "baseline"))
     args = parser.parse_args()
 
     if args.torch_threads is not None:
@@ -389,7 +408,7 @@ def main():
     if args.lr is not None: train_cfg["lr"] = args.lr
     if args.weight_decay is not None: train_cfg["weight_decay"] = args.weight_decay
 
-    aug_cfg = load_aug_config(args.aug_config, args.override)
+    augmentation_cfg = load_augmentation_config(args.augmentation_config, args.override)
     args._tri_overrides = parse_tri_overrides(args.tri_override)
     args._ckpt_dir = (
         str(Path(args.results_root) / args.exp_name / "ckpts")
@@ -397,20 +416,21 @@ def main():
     )
     device = get_device(args.device)
     subjects = parse_subjects(args.subject)
-    print(f"device: {device}\nexperiment: {args.exp_name}\nablation: {args.ablation}")
-    print(f"subjects: {subjects}\ntrain_cfg: {train_cfg}\naug_cfg: {aug_cfg}")
+    print(f"device: {device}\nexperiment: {args.exp_name}\npreset: {args.preset}")
+    print(f"subjects: {subjects}\ntrain_cfg: {train_cfg}")
+    print(f"augmentation_cfg: {augmentation_cfg}")
 
     per_subj = {}
     n_classes_seen = None
     for s in subjects:
-        out, n_classes = run_one_subject(s, train_cfg, aug_cfg, args, device)
+        out, n_classes = run_one_subject(s, train_cfg, augmentation_cfg, args, device)
         n_classes_seen = n_classes
         per_subj[s] = out
 
     extra = [
-        f"Ablation: {args.ablation}",
+        f"Preset: {args.preset}",
         f"N folds: {args.n_folds}",
-        f"Aug config: {aug_cfg}",
+        f"Augmentation config: {augmentation_cfg}",
     ]
 
     summary = format_summary(
@@ -419,7 +439,7 @@ def main():
         validation_desc=f"outer stratified {args.n_folds}-fold test; "
                         f"stratified val split from train_val",
         metric_desc=f"fold test set, checkpoint selected by val kappa "
-                    f"(test protocol: {aug_cfg.get('test_protocol', 'full_trial')})",
+                    f"(test protocol: {augmentation_cfg.get('test_protocol', 'full_trial')})",
         val_size=args.val_size, data_root=DATA_ROOT,
         n_classes=n_classes_seen, per_subject_results=per_subj,
         extra_lines=extra,
@@ -431,10 +451,10 @@ def main():
     with (out_dir / "results.json").open("w") as f:
         json.dump({
             "experiment": args.exp_name, "model": MODEL_NAME,
-            "ablation": args.ablation,
+            "preset": args.preset,
             "cv": f"{args.n_folds}fold", "n_folds": args.n_folds,
             "val_size": args.val_size, "seed": args.seed,
-            "train_config": train_cfg, "aug_config": aug_cfg,
+            "train_config": train_cfg, "augmentation_config": augmentation_cfg,
             "tri_overrides": dict(args._tri_overrides or {}),
             "per_subject": per_subj,
         }, f, indent=2)

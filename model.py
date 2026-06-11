@@ -24,82 +24,37 @@ if os.environ.get("TRI_NO_BENCHMARK", "0") != "1" and torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
 
 
-def parse_active_branches(ablation):
+def parse_active_branches(variant):
     mapping = {
         "full": ("time", "freq", "space"),
-        "time_only": ("time",),
-        "freq_only": ("freq",),
-        "space_only": ("space",),
-        "time_freq": ("time", "freq"),
-        "time_space": ("time", "space"),
-        "freq_space": ("freq", "space"),
-        "no_time": ("freq", "space"),
-        "no_freq": ("time", "space"),
-        "no_space": ("time", "freq"),
-        "full_zero_coords": ("time", "freq", "space"),
-        "full_std_coords": ("time", "freq", "space"),
-        "full_no_time_attn": ("time", "freq", "space"),
-        "full_no_band_attn": ("time", "freq", "space"),
-        "full_no_graph": ("time", "freq", "space"),
-        "full_no_channel_imp": ("time", "freq", "space"),
-        "full_random_coords": ("time", "freq", "space"),
-        "full_freq_tensor": ("time", "freq", "space"),
-        "full_cross_attn": ("time", "freq", "space"),
-        "full_sphere_rbf": ("time", "freq", "space"),
-        "full_lap_pe": ("time", "freq", "space"),
-        "full_sphere_lap": ("time", "freq", "space"),
+        "standard_coords": ("time", "freq", "space"),
     }
-    key = (ablation or "full").lower()
+    key = (variant or "full").lower()
     if key not in mapping:
-        raise ValueError(f"Unknown tri_ablation={ablation!r}; choices={sorted(mapping)}")
+        raise ValueError(f"Unknown tri_variant={variant!r}; choices={sorted(mapping)}")
     return mapping[key]
 
 
-def resolve_ablation_config(cfg):
-    ablation = getattr(cfg, "tri_ablation", "full")
-    key = (ablation or "full").lower()
+def resolve_variant_config(cfg):
+    variant = getattr(cfg, "tri_variant", "full")
+    key = (variant or "full").lower()
     coords_mode = getattr(cfg, "tri_coords_mode", "std")
     use_time_attn = bool(getattr(cfg, "tri_use_time_attn", True))
     use_band_attn = bool(getattr(cfg, "tri_use_band_attn", True))
     use_space_graph = bool(getattr(cfg, "tri_use_space_graph", True))
     use_channel_importance = bool(getattr(cfg, "tri_use_channel_importance", True))
 
-    # New orthogonal toggles (default to whatever cfg already carries).
     freq_pool_mode = getattr(cfg, "freq_pool_mode", "flatten")
     cross_branch_attn_enabled = bool(getattr(cfg, "cross_branch_attn_enabled", False))
     space_geom_mode = getattr(cfg, "space_geom_mode", "innerproduct")
     space_laplacian_pe = bool(getattr(cfg, "space_laplacian_pe", False))
 
-    if key == "full_freq_tensor":
-        freq_pool_mode = "tensor"
-    elif key == "full_cross_attn":
-        cross_branch_attn_enabled = True
-    elif key == "full_sphere_rbf":
-        space_geom_mode = "sphere_rbf"
-    elif key == "full_lap_pe":
-        space_laplacian_pe = True
-    elif key == "full_sphere_lap":
-        space_geom_mode = "sphere_rbf"
-        space_laplacian_pe = True
-
-    if key == "full_zero_coords":
-        coords_mode = "zero"
-    elif key == "full_std_coords":
+    if key == "standard_coords":
         coords_mode = "std"
-    elif key == "full_random_coords":
-        coords_mode = "random"
-    elif key == "full_no_time_attn":
-        use_time_attn = False
-    elif key == "full_no_band_attn":
-        use_band_attn = False
-    elif key == "full_no_graph":
-        use_space_graph = False
-    elif key == "full_no_channel_imp":
-        use_channel_importance = False
 
     active_branches = parse_active_branches(key)
     return {
-        "ablation": key,
+        "variant": key,
         "active_branches": active_branches,
         "coords_mode": coords_mode,
         "use_time_attn": use_time_attn,
@@ -534,7 +489,11 @@ class FreqBranch(nn.Module):
             self.structured_win_pool = None
             self.structured_out = None
 
-            rb = freq_tensor_rank_band if freq_tensor_rank_band is not None else min(self.n_bands, 4)
+            rb = (
+                freq_tensor_rank_band
+                if freq_tensor_rank_band is not None
+                else min(self.n_bands, 4)
+            )
             rc = freq_tensor_rank_chan if freq_tensor_rank_chan is not None else 16
             rw = freq_tensor_rank_win if freq_tensor_rank_win is not None else min(n_win, 2)
             rb = int(max(1, min(rb, self.n_bands)))
@@ -664,7 +623,10 @@ class FreqBranch(nn.Module):
                                     getattr(self, "win_dyn_out", None))
                 if m is not None for p in m.parameters()
             )
-            print(f"[FreqBranch][window_dynamics] mode={self.freq_window_dynamics}, params={wd_params}")
+            print(
+                f"[FreqBranch][window_dynamics] "
+                f"mode={self.freq_window_dynamics}, params={wd_params}"
+            )
 
         # Restore the RNG so downstream module init is identical to baseline.
         torch.set_rng_state(_rng_state)
@@ -1242,7 +1204,10 @@ class TriDomainClassifier(nn.Module):
                 "mlp/gate/gate_mlp/poe/poe_mlp/lowrank_cp, "
                 f"got {fusion_head_mode!r}"
             )
-        if self.fusion_head_mode in ("gate", "gate_mlp", "poe", "poe_mlp") and not self.aux_loss_enabled:
+        if (
+            self.fusion_head_mode in ("gate", "gate_mlp", "poe", "poe_mlp")
+            and not self.aux_loss_enabled
+        ):
             raise ValueError(
                 "fusion_head_mode='gate'/'gate_mlp'/'poe'/'poe_mlp' requires "
                 "aux_loss_enabled=True (fusion composes the aux head logits)"
@@ -1721,16 +1686,16 @@ def build_model(cfg, model_name="tridomain"):
     if freq_taps is not None and freq_taps <= 0:
         freq_taps = None
 
-    ablation_cfg = resolve_ablation_config(cfg)
-    active_branches = ablation_cfg["active_branches"]
-    coords_mode = ablation_cfg["coords_mode"]
-    use_time_attn = ablation_cfg["use_time_attn"]
-    use_band_attn = ablation_cfg["use_band_attn"]
-    use_space_graph = ablation_cfg["use_space_graph"]
-    use_channel_importance = ablation_cfg["use_channel_importance"]
+    variant_cfg = resolve_variant_config(cfg)
+    active_branches = variant_cfg["active_branches"]
+    coords_mode = variant_cfg["coords_mode"]
+    use_time_attn = variant_cfg["use_time_attn"]
+    use_band_attn = variant_cfg["use_band_attn"]
+    use_space_graph = variant_cfg["use_space_graph"]
+    use_channel_importance = variant_cfg["use_channel_importance"]
 
-    space_geom_mode = ablation_cfg["space_geom_mode"]
-    space_laplacian_pe = bool(ablation_cfg["space_laplacian_pe"])
+    space_geom_mode = variant_cfg["space_geom_mode"]
+    space_laplacian_pe = bool(variant_cfg["space_laplacian_pe"])
     space_lap_pe_k = int(getattr(cfg, "space_lap_pe_k", 8))
     space_sphere_sigma_init = float(getattr(cfg, "space_sphere_sigma_init", 0.5))
     space_lap_pe_sign_flip = bool(getattr(cfg, "space_lap_pe_sign_flip", False))
@@ -1771,7 +1736,7 @@ def build_model(cfg, model_name="tridomain"):
 
     print(
         "[TriDomain] "
-        f"ablation={ablation_cfg['ablation']}, "
+        f"variant={variant_cfg['variant']}, "
         f"active_branches={active_branches}, "
         f"coords_mode={coords_mode}, "
         f"use_time_attn={use_time_attn}, "
@@ -1811,7 +1776,7 @@ def build_model(cfg, model_name="tridomain"):
         cov_dim=getattr(cfg, "cov_dim", None),
         modality_dropout_enabled=bool(getattr(cfg, "modality_dropout_enabled", False)),
         modality_dropout_p=float(getattr(cfg, "modality_dropout_p", 0.2)),
-        freq_pool_mode=ablation_cfg["freq_pool_mode"],
+        freq_pool_mode=variant_cfg["freq_pool_mode"],
         freq_var_shrinkage=float(getattr(cfg, "freq_var_shrinkage", 0.0)),
         freq_tensor_rank_band=getattr(cfg, "freq_tensor_rank_band", None),
         freq_tensor_rank_chan=getattr(cfg, "freq_tensor_rank_chan", 16),
@@ -1828,7 +1793,7 @@ def build_model(cfg, model_name="tridomain"):
         space_lap_pe_sign_flip=space_lap_pe_sign_flip,
         branch_decorr_enabled=bool(getattr(cfg, "branch_decorr_enabled", False)),
         branch_decorr_weight=float(getattr(cfg, "branch_decorr_weight", 0.01)),
-        cross_branch_attn_enabled=bool(ablation_cfg["cross_branch_attn_enabled"]),
+        cross_branch_attn_enabled=bool(variant_cfg["cross_branch_attn_enabled"]),
         cross_branch_attn_heads=int(getattr(cfg, "cross_branch_attn_heads", 4)),
         cross_branch_attn_layers=int(getattr(cfg, "cross_branch_attn_layers", 1)),
         cross_branch_attn_ff_mult=int(getattr(cfg, "cross_branch_attn_ff_mult", 2)),

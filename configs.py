@@ -1,8 +1,7 @@
 """Default training configuration for the TriDomain classifier.
 
 Mirrors the EEGNet training defaults used by the parent check_experiment
-framework so that TriDomain ablation numbers stay comparable with the
-baseline runs.
+framework so the baseline runs stay comparable.
 """
 
 TRIDOMAIN_CONFIG = {

@@ -27,31 +27,24 @@ def summarize_run(results_root, run):
         "acc_excl_s2_s3": _fmt_pm(excl.get("acc_mean", np.nan), excl.get("acc_std", np.nan)),
         "kappa_excl_s2_s3": _fmt_pm(excl.get("kappa_mean", np.nan), excl.get("kappa_std", np.nan)),
     }
-    row.update(data.get("reliability_means") or {})
     return row
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--results-root", default="results/aug_hpo")
+    p.add_argument("--results-root", default="results/baseline")
     p.add_argument("--runs", nargs="+", required=True)
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
     rows = [summarize_run(args.results_root, run) for run in args.runs]
-    reliability_keys = sorted({
-        key
-        for row in rows
-        for key in row
-        if key.startswith("mean_w_") or key.startswith("mean_u_")
-    })
     columns = [
         "run",
         "acc_all10",
         "kappa_all10",
         "acc_excl_s2_s3",
         "kappa_excl_s2_s3",
-    ] + reliability_keys
+    ]
 
     lines = []
     lines.append("| " + " | ".join(columns) + " |")

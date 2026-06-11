@@ -1,7 +1,7 @@
-# TriDomain Codex: T7 + SWA
+# TriDomain Baseline: T7 + SWA
 
-This folder is a focused copy of the original `tri_domain` code path needed to
-run the best Task 5 setting:
+This repository contains only the TriDomain baseline path needed to run the
+T7 + SWA setting:
 
 ```text
 S_swa = T7 + SWA(start=0.75)
@@ -23,25 +23,28 @@ swa_enabled=True
 swa_start_frac=0.75
 ```
 
-Run the full reproduced training:
+Run the full baseline training:
 
 ```bash
-cd /home/wong/eeg/selfmodel/tri_domain_codex
-./run_t7_swa.sh
+./run_baseline.sh
 ```
 
 Run from the copied checkpoints instead of retraining:
 
 ```bash
-cd /home/wong/eeg/selfmodel/tri_domain_codex
-./run_t7_swa.sh --resume
+./run_baseline.sh --resume
 ```
 
 For a quick smoke test:
 
 ```bash
-cd /home/wong/eeg/selfmodel/tri_domain_codex
-./run_t7_swa.sh --subject S1 --n-folds 2 --epochs 1 --num-workers 0
+./run_baseline.sh --subject S1 --n-folds 2 --epochs 1 --num-workers 0
+```
+
+Run the 10-seed Monte-Carlo baseline:
+
+```bash
+./run_baseline_mc.sh
 ```
 
 The launcher defaults to

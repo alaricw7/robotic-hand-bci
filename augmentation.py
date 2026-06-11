@@ -1,10 +1,10 @@
-"""Train-time augmentations for TriDomain. Test/val: identity.
+"""Train-time augmentation for TriDomain. Test/val: identity.
 
 All transforms operate on torch tensors of shape (C, T) (per-sample) or
 (B, C, T) (mixup, applied at batch level). Each transform is a class with
 torch.no_grad forward.
 
-Aug config keys (defaults disable everything; baseline = no aug):
+Augmentation config keys (defaults disable everything; baseline = no augmentation):
 
   crop_enabled        bool
   crop_len            int       # samples; must be divisible by freq_windows (=4 by default)
@@ -81,7 +81,7 @@ class SlidingCropTrainDataset(Dataset):
     """
 
     def __init__(self, X_np: np.ndarray, y_np: np.ndarray,
-                 crop_len: int, crop_stride: int, sample_aug=None):
+                 crop_len: int, crop_stride: int, sample_transforms=None):
         assert X_np.ndim == 3, f"X shape {X_np.shape}"
         n, C, T = X_np.shape
         assert crop_len <= T, f"crop_len={crop_len} > T={T}"
@@ -92,7 +92,7 @@ class SlidingCropTrainDataset(Dataset):
         self.y = torch.from_numpy(y_np).long()
         self.crop_len = int(crop_len)
         self.starts = starts
-        self.sample_aug = sample_aug or []
+        self.sample_transforms = sample_transforms or []
         self.index = [(i, s) for i in range(n) for s in starts]
 
     def __len__(self):
@@ -101,26 +101,26 @@ class SlidingCropTrainDataset(Dataset):
     def __getitem__(self, idx):
         i, s = self.index[idx]
         x = self.X[i, :, s:s + self.crop_len].clone()
-        for aug in self.sample_aug:
-            x = aug(x)
+        for transform in self.sample_transforms:
+            x = transform(x)
         return x, self.y[i]
 
 
 class PlainTrainDataset(Dataset):
     """Full-trial training dataset with per-sample augmentations only."""
 
-    def __init__(self, X_np: np.ndarray, y_np: np.ndarray, sample_aug=None):
+    def __init__(self, X_np: np.ndarray, y_np: np.ndarray, sample_transforms=None):
         self.X = torch.from_numpy(X_np).float()
         self.y = torch.from_numpy(y_np).long()
-        self.sample_aug = sample_aug or []
+        self.sample_transforms = sample_transforms or []
 
     def __len__(self):
         return len(self.y)
 
     def __getitem__(self, idx):
         x = self.X[idx].clone()
-        for aug in self.sample_aug:
-            x = aug(x)
+        for transform in self.sample_transforms:
+            x = transform(x)
         return x, self.y[idx]
 
 
@@ -163,7 +163,7 @@ def _one_hot(y: torch.Tensor, n_classes: int):
 
 # ---------- factory ---------- #
 
-DEFAULT_AUG = {
+DEFAULT_AUGMENTATION = {
     "crop_enabled": False,
     "crop_len": 500,
     "crop_stride": 125,
@@ -181,7 +181,7 @@ DEFAULT_AUG = {
 }
 
 
-def build_sample_aug(cfg: dict):
+def build_sample_transforms(cfg: dict):
     ops = []
     if cfg.get("freqmask_enabled", False):
         ops.append(FreqBandMask(p=cfg["freqmask_p"], bw_hz=cfg["freqmask_bw_hz"], fs=cfg["fs"]))
@@ -193,15 +193,15 @@ def build_sample_aug(cfg: dict):
 
 
 def make_train_loader(X_tr_std, y_tr, batch_size, cfg: dict, num_workers=2):
-    aug_ops = build_sample_aug(cfg)
+    transforms = build_sample_transforms(cfg)
     if cfg.get("crop_enabled", False):
         ds = SlidingCropTrainDataset(
             X_tr_std, y_tr,
             crop_len=cfg["crop_len"], crop_stride=cfg["crop_stride"],
-            sample_aug=aug_ops,
+            sample_transforms=transforms,
         )
     else:
-        ds = PlainTrainDataset(X_tr_std, y_tr, sample_aug=aug_ops)
+        ds = PlainTrainDataset(X_tr_std, y_tr, sample_transforms=transforms)
     return DataLoader(ds, batch_size=batch_size, shuffle=True,
                       num_workers=num_workers, pin_memory=True, drop_last=False)
 
