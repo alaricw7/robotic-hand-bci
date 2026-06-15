@@ -1,0 +1,14 @@
+[project]
+name = "robotic-hand-bci"
+version = "0.1.0"
+description = "TriDomain T7 + SWA baseline for robotic hand BCI EEG experiments."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "torch>=2.4",
+]
+
+[tool.uv]
+package = false

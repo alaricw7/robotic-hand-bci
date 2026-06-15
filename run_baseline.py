@@ -45,6 +45,7 @@ from data import (  # noqa: E402
     SUBJECTS,
     load_subject,
     standardize_per_channel,
+    stratified_train_val_test_split,
     stratified_kfold_train_val_test_splits,
 )
 from formatter import format_summary  # noqa: E402
@@ -192,6 +193,55 @@ def _predict(model, loader, device):
     return np.concatenate(ys), np.concatenate(ps)
 
 
+def _confusion_matrix(y_true, y_pred, n_classes):
+    cm = np.zeros((n_classes, n_classes), dtype=np.int64)
+    np.add.at(cm, (y_true.astype(np.int64), y_pred.astype(np.int64)), 1)
+    return cm
+
+
+def _write_confusion_matrix_files(out_dir, per_subj):
+    for sid, result in per_subj.items():
+        cm = result.get("confusion_matrix")
+        if cm is None:
+            continue
+        cm = np.asarray(cm, dtype=np.int64)
+        prefix = "confusion_matrix" if sid == "POOLED" else f"confusion_matrix_{sid}"
+        header = ",".join(["true\\pred"] + [f"T{i + 1}" for i in range(cm.shape[1])])
+        rows = [
+            ",".join([f"T{i + 1}"] + [str(int(v)) for v in row])
+            for i, row in enumerate(cm)
+        ]
+        (out_dir / f"{prefix}.csv").write_text(header + "\n" + "\n".join(rows) + "\n")
+
+        denom = cm.sum(axis=1, keepdims=True).clip(min=1)
+        cm_norm = cm / denom
+        norm_rows = [
+            ",".join([f"T{i + 1}"] + [f"{float(v):.6f}" for v in row])
+            for i, row in enumerate(cm_norm)
+        ]
+        (out_dir / f"{prefix}_row_norm.csv").write_text(
+            header + "\n" + "\n".join(norm_rows) + "\n"
+        )
+
+
+def _progress_bar(epoch, epochs, width=28):
+    frac = epoch / max(epochs, 1)
+    filled = int(round(width * frac))
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
+def _print_epoch_progress(epoch, epochs, train_loss, val_kappa, best_val_kappa,
+                          best_epoch, start_time):
+    elapsed = time.time() - start_time
+    bar = _progress_bar(epoch, epochs)
+    msg = (
+        f"\r  train {bar} {epoch:>3}/{epochs:<3} "
+        f"loss={train_loss:.4f} val_kappa={val_kappa:.4f} "
+        f"best={best_val_kappa:.4f}@ep{best_epoch} elapsed={elapsed:.1f}s"
+    )
+    print(msg, end="", flush=True)
+
+
 def fit_one_fold(model, train_loader, val_loader, n_classes, train_cfg, device, mixup,
                  aux_loss_weight=0.0, save_ckpt_path=None, save_meta=None,
                  swa_enabled=False, swa_start_frac=0.75):
@@ -210,9 +260,12 @@ def fit_one_fold(model, train_loader, val_loader, n_classes, train_cfg, device, 
         swa_model = AveragedModel(model)
         swa_start = max(1, int(epochs * float(swa_start_frac)))
 
+    progress_t0 = time.time()
     for epoch in range(1, epochs + 1):
-        _train_epoch(model, train_loader, optim, n_classes, device, mixup,
-                     aux_loss_weight=aux_loss_weight)
+        train_loss = _train_epoch(
+            model, train_loader, optim, n_classes, device, mixup,
+            aux_loss_weight=aux_loss_weight,
+        )
         # ckpt selection by main-head val-kappa (unchanged)
         y_true, y_pred = _predict(model, val_loader, device)
         _, val_kappa, _ = compute_metrics(y_true, y_pred, n_classes)
@@ -223,9 +276,15 @@ def fit_one_fold(model, train_loader, val_loader, n_classes, train_cfg, device, 
         if swa_enabled and epoch >= swa_start:
             swa_model.update_parameters(model)
         sched.step()
+        _print_epoch_progress(
+            epoch, epochs, train_loss, val_kappa, best_val_kappa,
+            best_epoch, progress_t0,
+        )
+    print(flush=True)
 
     if swa_enabled and swa_model is not None:
         from torch.optim.swa_utils import update_bn
+        print("  SWA: updating batch norm and evaluating averaged weights...", flush=True)
         # Recompute BN running stats over the train loader before evaluating.
         update_bn(train_loader, swa_model, device=device)
         # Copy SWA-averaged weights back into the user-facing model so the
@@ -333,6 +392,7 @@ def run_one_subject(subject, train_cfg, augmentation_cfg, args, device):
         else:
             y_true, y_pred = _predict(model, test_loader, device)
         test_acc, test_kappa, test_per_class = compute_metrics(y_true, y_pred, n_classes)
+        cm = _confusion_matrix(y_true, y_pred, n_classes)
         elapsed = time.time() - t0
 
         fold_results.append({
@@ -340,6 +400,7 @@ def run_one_subject(subject, train_cfg, augmentation_cfg, args, device):
             "acc": float(test_acc),
             "kappa": float(test_kappa),
             "per_class": test_per_class.tolist(),
+            "confusion_matrix": cm.tolist(),
             "best_val_kappa": best_val_kappa,
             "best_epoch": best_epoch,
             "counts": {
@@ -355,16 +416,190 @@ def run_one_subject(subject, train_cfg, augmentation_cfg, args, device):
     accs = np.asarray([r["acc"] for r in fold_results])
     kappas = np.asarray([r["kappa"] for r in fold_results])
     per_class = np.stack([np.asarray(r["per_class"]) for r in fold_results])
+    confusion_matrix = np.stack([
+        np.asarray(r["confusion_matrix"], dtype=np.int64) for r in fold_results
+    ]).sum(axis=0)
     summary = {
         "acc": float(accs.mean()), "acc_std": float(accs.std()),
         "kappa": float(kappas.mean()), "kappa_std": float(kappas.std()),
         "per_class": per_class.mean(axis=0).tolist(),
+        "confusion_matrix": confusion_matrix.tolist(),
         "folds": fold_results,
     }
     print(f"  {subject} {args.n_folds}-fold mean: "
           f"acc={summary['acc']:.4f}±{summary['acc_std']:.4f} "
           f"kappa={summary['kappa']:.4f}±{summary['kappa_std']:.4f}")
     return summary, n_classes
+
+
+def run_pooled_subjects(subjects, train_cfg, augmentation_cfg, args, device):
+    split_parts = {"train": [], "val": [], "test": []}
+    split_labels = {"train": [], "val": [], "test": []}
+    subject_counts = {}
+    n_channels = n_times = n_classes = None
+
+    print("  pooled: loading subjects and building splits...", flush=True)
+    for offset, subject in enumerate(subjects):
+        t_load = time.time()
+        X, y = load_subject(subject)
+        if n_channels is None:
+            n_channels, n_times = X.shape[1], X.shape[2]
+            n_classes = int(y.max() + 1)
+        elif X.shape[1:] != (n_channels, n_times):
+            raise ValueError(
+                f"{subject} shape {X.shape[1:]} does not match "
+                f"expected {(n_channels, n_times)}"
+            )
+        else:
+            n_classes = max(n_classes, int(y.max() + 1))
+
+        tr_idx, va_idx, te_idx = stratified_train_val_test_split(
+            y,
+            train_size=args.train_size,
+            val_size=args.val_size,
+            test_size=args.test_size,
+            seed=args.seed + offset,
+        )
+        split_parts["train"].append(X[tr_idx])
+        split_parts["val"].append(X[va_idx])
+        split_parts["test"].append(X[te_idx])
+        split_labels["train"].append(y[tr_idx])
+        split_labels["val"].append(y[va_idx])
+        split_labels["test"].append(y[te_idx])
+        subject_counts[subject] = {
+            "train": int(len(tr_idx)),
+            "val": int(len(va_idx)),
+            "test": int(len(te_idx)),
+        }
+        print(
+            f"  pooled: {subject} shape={tuple(X.shape)} "
+            f"split={len(tr_idx)}/{len(va_idx)}/{len(te_idx)} "
+            f"load+split={time.time() - t_load:.1f}s",
+            flush=True,
+        )
+
+    print("  pooled: concatenating subject splits...", flush=True)
+    X_tr_raw = np.concatenate(split_parts["train"], axis=0)
+    X_va_raw = np.concatenate(split_parts["val"], axis=0)
+    X_te_raw = np.concatenate(split_parts["test"], axis=0)
+    y_tr = np.concatenate(split_labels["train"], axis=0)
+    y_va = np.concatenate(split_labels["val"], axis=0)
+    y_te = np.concatenate(split_labels["test"], axis=0)
+    print(
+        f"  pooled: raw train/val/test shapes "
+        f"{tuple(X_tr_raw.shape)} / {tuple(X_va_raw.shape)} / {tuple(X_te_raw.shape)}",
+        flush=True,
+    )
+
+    t_std = time.time()
+    print("  pooled: standardizing with train-set channel statistics...", flush=True)
+    X_tr, X_va, X_te = standardize_per_channel(X_tr_raw, X_va_raw, X_te_raw)
+    print(f"  pooled: standardization done in {time.time() - t_std:.1f}s", flush=True)
+
+    print("  pooled: creating data loaders...", flush=True)
+    train_loader = make_train_loader(
+        X_tr, y_tr, train_cfg["batch_size"], augmentation_cfg,
+        num_workers=args.num_workers,
+    )
+    val_loader = make_eval_loader(
+        X_va, y_va, train_cfg["batch_size"], num_workers=args.num_workers
+    )
+    test_loader = make_eval_loader(
+        X_te, y_te, train_cfg["batch_size"], num_workers=args.num_workers
+    )
+
+    set_seed(args.seed)
+    cfg_tri = build_tri_cfg(n_channels, n_times, n_classes, args.preset, args.seed,
+                            tri_overrides=args._tri_overrides)
+    model = build_model(cfg_tri, model_name="tridomain").to(device)
+    mixup = (
+        MixUp(augmentation_cfg["mixup_alpha"])
+        if augmentation_cfg.get("mixup_enabled", False)
+        else None
+    )
+
+    aux_loss_weight = float(
+        args._tri_overrides.get("aux_loss_weight", 0.0)
+        if args._tri_overrides else 0.0
+    )
+    swa_enabled = bool(
+        args._tri_overrides.get("swa_enabled", False)
+        if args._tri_overrides else False
+    )
+    swa_start_frac = float(
+        args._tri_overrides.get("swa_start_frac", 0.75)
+        if args._tri_overrides else 0.75
+    )
+    save_ckpt_path = None
+    if getattr(args, "_ckpt_dir", None) is not None:
+        save_ckpt_path = str(Path(args._ckpt_dir) / "pooled" / "model.pt")
+    save_meta = {
+        "preset": args.preset,
+        "tri_overrides": dict(args._tri_overrides or {}),
+        "seed": args.seed,
+        "subjects": list(subjects),
+        "split_mode": "pooled",
+        "train_size": args.train_size,
+        "val_size": args.val_size,
+        "test_size": args.test_size,
+        "subject_counts": subject_counts,
+    }
+
+    t0 = time.time()
+    if getattr(args, "resume", False) and save_ckpt_path \
+            and Path(save_ckpt_path).exists():
+        blob = torch.load(save_ckpt_path, map_location="cpu", weights_only=False)
+        model.load_state_dict(blob["state_dict"])
+        best_val_kappa = float(blob.get("best_val_kappa", 0.0))
+        best_epoch = int(blob.get("best_epoch", -1))
+        print(f"  pooled: [RESUME] loaded ckpt "
+              f"(val_k={best_val_kappa:.4f}@ep{best_epoch})")
+    else:
+        best_val_kappa, best_epoch = fit_one_fold(
+            model, train_loader, val_loader, n_classes, train_cfg, device, mixup,
+            aux_loss_weight=aux_loss_weight,
+            save_ckpt_path=save_ckpt_path,
+            save_meta=save_meta,
+            swa_enabled=swa_enabled,
+            swa_start_frac=swa_start_frac,
+        )
+
+    proto = augmentation_cfg.get("test_protocol", "full_trial")
+    if proto == "crop_voting" and augmentation_cfg.get("crop_enabled", False):
+        y_pred, _ = crop_vote_logits(
+            model, X_te, augmentation_cfg, device,
+            batch_size=train_cfg["batch_size"],
+        )
+        y_true = y_te
+    else:
+        y_true, y_pred = _predict(model, test_loader, device)
+    test_acc, test_kappa, test_per_class = compute_metrics(y_true, y_pred, n_classes)
+    cm = _confusion_matrix(y_true, y_pred, n_classes)
+    elapsed = time.time() - t0
+
+    result = {
+        "acc": float(test_acc),
+        "acc_std": 0.0,
+        "kappa": float(test_kappa),
+        "kappa_std": 0.0,
+        "per_class": test_per_class.tolist(),
+        "confusion_matrix": cm.tolist(),
+        "best_val_kappa": float(best_val_kappa),
+        "best_epoch": int(best_epoch),
+        "counts": {
+            "train": int(len(y_tr)),
+            "val": int(len(y_va)),
+            "test": int(len(y_te)),
+        },
+        "subject_counts": subject_counts,
+    }
+    print(
+        "  pooled train/val/test: "
+        f"{len(y_tr)}/{len(y_va)}/{len(y_te)} "
+        f"acc={test_acc:.4f} kappa={test_kappa:.4f} "
+        f"val_kappa={best_val_kappa:.4f}@ep{best_epoch} (t={elapsed:.1f}s)"
+    )
+    return result, n_classes
 
 
 def main():
@@ -385,8 +620,14 @@ def main():
                         help="if a per-fold ckpt already exists, skip training "
                              "for that fold; just load and run test forward.")
     parser.add_argument("--subject", default="all")
+    parser.add_argument("--split-mode", choices=["pooled", "subject_cv"],
+                        default="pooled",
+                        help="pooled trains one model on concatenated subject splits; "
+                             "subject_cv keeps the old per-subject CV protocol.")
     parser.add_argument("--n-folds", type=int, default=10)
-    parser.add_argument("--val-size", type=float, default=0.1)
+    parser.add_argument("--train-size", type=float, default=0.7)
+    parser.add_argument("--val-size", type=float, default=0.2)
+    parser.add_argument("--test-size", type=float, default=0.1)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
@@ -422,23 +663,42 @@ def main():
 
     per_subj = {}
     n_classes_seen = None
-    for s in subjects:
-        out, n_classes = run_one_subject(s, train_cfg, augmentation_cfg, args, device)
-        n_classes_seen = n_classes
-        per_subj[s] = out
+    if args.split_mode == "pooled":
+        out, n_classes_seen = run_pooled_subjects(
+            subjects, train_cfg, augmentation_cfg, args, device
+        )
+        per_subj["POOLED"] = out
+    else:
+        for s in subjects:
+            out, n_classes = run_one_subject(s, train_cfg, augmentation_cfg, args, device)
+            n_classes_seen = n_classes
+            per_subj[s] = out
 
     extra = [
         f"Preset: {args.preset}",
-        f"N folds: {args.n_folds}",
+        f"Split mode: {args.split_mode}",
+        f"N folds: {args.n_folds}" if args.split_mode == "subject_cv"
+        else f"Train/val/test: {args.train_size:.2f}/{args.val_size:.2f}/{args.test_size:.2f}",
         f"Augmentation config: {augmentation_cfg}",
     ]
+    validation_desc = (
+        f"per-subject stratified {args.train_size:.2f}/{args.val_size:.2f}/"
+        f"{args.test_size:.2f} split; pooled train, pooled val, pooled test"
+        if args.split_mode == "pooled"
+        else f"outer stratified {args.n_folds}-fold test; "
+             f"stratified val split from train_val"
+    )
+    cv_desc = (
+        f"pooled_{args.train_size:.2f}_{args.val_size:.2f}_{args.test_size:.2f}"
+        if args.split_mode == "pooled"
+        else f"{args.n_folds}fold"
+    )
 
     summary = format_summary(
         experiment=args.exp_name, model_name=MODEL_NAME,
-        cv=f"{args.n_folds}fold",
-        validation_desc=f"outer stratified {args.n_folds}-fold test; "
-                        f"stratified val split from train_val",
-        metric_desc=f"fold test set, checkpoint selected by val kappa "
+        cv=cv_desc,
+        validation_desc=validation_desc,
+        metric_desc=f"test set, checkpoint selected by val kappa "
                     f"(test protocol: {augmentation_cfg.get('test_protocol', 'full_trial')})",
         val_size=args.val_size, data_root=DATA_ROOT,
         n_classes=n_classes_seen, per_subject_results=per_subj,
@@ -448,12 +708,14 @@ def main():
     out_dir = Path(args.results_root) / args.exp_name
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "summary.txt").write_text(summary, encoding="utf-8")
+    _write_confusion_matrix_files(out_dir, per_subj)
     with (out_dir / "results.json").open("w") as f:
         json.dump({
             "experiment": args.exp_name, "model": MODEL_NAME,
-            "preset": args.preset,
-            "cv": f"{args.n_folds}fold", "n_folds": args.n_folds,
-            "val_size": args.val_size, "seed": args.seed,
+            "preset": args.preset, "split_mode": args.split_mode,
+            "cv": cv_desc, "n_folds": args.n_folds,
+            "train_size": args.train_size, "val_size": args.val_size,
+            "test_size": args.test_size, "seed": args.seed,
             "train_config": train_cfg, "augmentation_config": augmentation_cfg,
             "tri_overrides": dict(args._tri_overrides or {}),
             "per_subject": per_subj,

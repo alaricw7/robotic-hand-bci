@@ -23,30 +23,26 @@ swa_enabled=True
 swa_start_frac=0.75
 ```
 
-Run the full baseline training:
+Run the full pooled baseline training. Each subject is split 70/20/10, then
+all train, validation, and test splits are concatenated across subjects:
 
 ```bash
-./run_baseline.sh
+uv run ./run_baseline.sh
 ```
 
 Run from the copied checkpoints instead of retraining:
 
 ```bash
-./run_baseline.sh --resume
+uv run ./run_baseline.sh --resume
 ```
 
 For a quick smoke test:
 
 ```bash
-./run_baseline.sh --subject S1 --n-folds 2 --epochs 1 --num-workers 0
+uv run ./run_baseline.sh --subject S1 --epochs 1 --num-workers 0
 ```
 
-Run the 10-seed Monte-Carlo baseline:
-
-```bash
-./run_baseline_mc.sh
-```
-
-The launcher defaults to
-`/mnt/disk/soeeg/miniconda3/envs/eeg_env/bin/python`. Set
-`PYTHON_BIN=/path/to/python` if your environment uses a different executable.
+Set `BCI_DATA_ROOT` to the directory containing `S1/`, `S2/`, ...
+if the data is not under `~/my-data`. The launchers default to `python`.
+Set `PYTHON_BIN=/path/to/python` if your environment uses a different
+executable.
