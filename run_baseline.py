@@ -200,12 +200,8 @@ def _confusion_matrix(y_true, y_pred, n_classes):
 
 
 def _write_confusion_matrix_files(out_dir, per_subj):
-    for sid, result in per_subj.items():
-        cm = result.get("confusion_matrix")
-        if cm is None:
-            continue
+    def write_one(prefix, cm):
         cm = np.asarray(cm, dtype=np.int64)
-        prefix = "confusion_matrix" if sid == "POOLED" else f"confusion_matrix_{sid}"
         header = ",".join(["true\\pred"] + [f"T{i + 1}" for i in range(cm.shape[1])])
         rows = [
             ",".join([f"T{i + 1}"] + [str(int(v)) for v in row])
@@ -222,6 +218,16 @@ def _write_confusion_matrix_files(out_dir, per_subj):
         (out_dir / f"{prefix}_row_norm.csv").write_text(
             header + "\n" + "\n".join(norm_rows) + "\n"
         )
+
+    for sid, result in per_subj.items():
+        cm = result.get("confusion_matrix")
+        if cm is not None:
+            prefix = "confusion_matrix" if sid == "POOLED" else f"confusion_matrix_{sid}"
+            write_one(prefix, cm)
+        for nested_sid, nested in result.get("by_subject", {}).items():
+            nested_cm = nested.get("confusion_matrix")
+            if nested_cm is not None:
+                write_one(f"confusion_matrix_pooled_{nested_sid}", nested_cm)
 
 
 def _progress_bar(epoch, epochs, width=28):
@@ -575,6 +581,27 @@ def run_pooled_subjects(subjects, train_cfg, augmentation_cfg, args, device):
         y_true, y_pred = _predict(model, test_loader, device)
     test_acc, test_kappa, test_per_class = compute_metrics(y_true, y_pred, n_classes)
     cm = _confusion_matrix(y_true, y_pred, n_classes)
+    by_subject = {}
+    cursor = 0
+    for subject in subjects:
+        n_test = subject_counts[subject]["test"]
+        y_s = y_true[cursor:cursor + n_test]
+        p_s = y_pred[cursor:cursor + n_test]
+        s_acc, s_kappa, s_per_class = compute_metrics(y_s, p_s, n_classes)
+        by_subject[subject] = {
+            "acc": float(s_acc),
+            "acc_std": 0.0,
+            "kappa": float(s_kappa),
+            "kappa_std": 0.0,
+            "per_class": s_per_class.tolist(),
+            "confusion_matrix": _confusion_matrix(y_s, p_s, n_classes).tolist(),
+            "counts": {
+                "train": int(subject_counts[subject]["train"]),
+                "val": int(subject_counts[subject]["val"]),
+                "test": int(n_test),
+            },
+        }
+        cursor += n_test
     elapsed = time.time() - t0
 
     result = {
@@ -592,6 +619,7 @@ def run_pooled_subjects(subjects, train_cfg, augmentation_cfg, args, device):
             "test": int(len(y_te)),
         },
         "subject_counts": subject_counts,
+        "by_subject": by_subject,
     }
     print(
         "  pooled train/val/test: "
@@ -600,6 +628,170 @@ def run_pooled_subjects(subjects, train_cfg, augmentation_cfg, args, device):
         f"val_kappa={best_val_kappa:.4f}@ep{best_epoch} (t={elapsed:.1f}s)"
     )
     return result, n_classes
+
+
+def run_loso_subjects(subjects, train_cfg, augmentation_cfg, args, device):
+    data_by_subject = {}
+    n_channels = n_times = n_classes = None
+
+    print("  loso: loading subjects...", flush=True)
+    for subject in subjects:
+        X, y = load_subject(subject)
+        data_by_subject[subject] = (X, y)
+        if n_channels is None:
+            n_channels, n_times = X.shape[1], X.shape[2]
+            n_classes = int(y.max() + 1)
+        elif X.shape[1:] != (n_channels, n_times):
+            raise ValueError(
+                f"{subject} shape {X.shape[1:]} does not match "
+                f"expected {(n_channels, n_times)}"
+            )
+        else:
+            n_classes = max(n_classes, int(y.max() + 1))
+
+    per_subj = {}
+    for heldout_idx, heldout in enumerate(subjects):
+        print(f"  loso: held-out test subject {heldout}", flush=True)
+        train_parts, val_parts = [], []
+        train_labels, val_labels = [], []
+        source_counts = {}
+        for offset, subject in enumerate(subjects):
+            X, y = data_by_subject[subject]
+            if subject == heldout:
+                continue
+            tr_idx, va_idx, _ = stratified_train_val_test_split(
+                y,
+                train_size=args.train_size,
+                val_size=args.val_size,
+                test_size=args.test_size,
+                seed=args.seed + heldout_idx * len(subjects) + offset,
+            )
+            train_parts.append(X[tr_idx])
+            val_parts.append(X[va_idx])
+            train_labels.append(y[tr_idx])
+            val_labels.append(y[va_idx])
+            source_counts[subject] = {
+                "train": int(len(tr_idx)),
+                "val": int(len(va_idx)),
+            }
+
+        X_te_raw, y_te = data_by_subject[heldout]
+        X_tr_raw = np.concatenate(train_parts, axis=0)
+        X_va_raw = np.concatenate(val_parts, axis=0)
+        y_tr = np.concatenate(train_labels, axis=0)
+        y_va = np.concatenate(val_labels, axis=0)
+        print(
+            f"  loso: {heldout} train/val/test shapes "
+            f"{tuple(X_tr_raw.shape)} / {tuple(X_va_raw.shape)} / {tuple(X_te_raw.shape)}",
+            flush=True,
+        )
+
+        X_tr, X_va, X_te = standardize_per_channel(X_tr_raw, X_va_raw, X_te_raw)
+        train_loader = make_train_loader(
+            X_tr, y_tr, train_cfg["batch_size"], augmentation_cfg,
+            num_workers=args.num_workers,
+        )
+        val_loader = make_eval_loader(
+            X_va, y_va, train_cfg["batch_size"], num_workers=args.num_workers
+        )
+        test_loader = make_eval_loader(
+            X_te, y_te, train_cfg["batch_size"], num_workers=args.num_workers
+        )
+
+        set_seed(args.seed + heldout_idx)
+        cfg_tri = build_tri_cfg(
+            n_channels, n_times, n_classes, args.preset, args.seed + heldout_idx,
+            tri_overrides=args._tri_overrides,
+        )
+        model = build_model(cfg_tri, model_name="tridomain").to(device)
+        mixup = (
+            MixUp(augmentation_cfg["mixup_alpha"])
+            if augmentation_cfg.get("mixup_enabled", False)
+            else None
+        )
+        aux_loss_weight = float(
+            args._tri_overrides.get("aux_loss_weight", 0.0)
+            if args._tri_overrides else 0.0
+        )
+        swa_enabled = bool(
+            args._tri_overrides.get("swa_enabled", False)
+            if args._tri_overrides else False
+        )
+        swa_start_frac = float(
+            args._tri_overrides.get("swa_start_frac", 0.75)
+            if args._tri_overrides else 0.75
+        )
+        save_ckpt_path = None
+        if getattr(args, "_ckpt_dir", None) is not None:
+            save_ckpt_path = str(Path(args._ckpt_dir) / "loso" / heldout / "model.pt")
+        save_meta = {
+            "preset": args.preset,
+            "tri_overrides": dict(args._tri_overrides or {}),
+            "seed": args.seed,
+            "subjects": list(subjects),
+            "split_mode": "loso",
+            "heldout_subject": heldout,
+            "source_subjects": [s for s in subjects if s != heldout],
+            "train_size": args.train_size,
+            "val_size": args.val_size,
+            "source_unused_size": args.test_size,
+            "source_counts": source_counts,
+        }
+
+        t0 = time.time()
+        if getattr(args, "resume", False) and save_ckpt_path \
+                and Path(save_ckpt_path).exists():
+            blob = torch.load(save_ckpt_path, map_location="cpu", weights_only=False)
+            model.load_state_dict(blob["state_dict"])
+            best_val_kappa = float(blob.get("best_val_kappa", 0.0))
+            best_epoch = int(blob.get("best_epoch", -1))
+            print(f"  loso {heldout}: [RESUME] loaded ckpt "
+                  f"(val_k={best_val_kappa:.4f}@ep{best_epoch})")
+        else:
+            best_val_kappa, best_epoch = fit_one_fold(
+                model, train_loader, val_loader, n_classes, train_cfg, device, mixup,
+                aux_loss_weight=aux_loss_weight,
+                save_ckpt_path=save_ckpt_path,
+                save_meta=save_meta,
+                swa_enabled=swa_enabled,
+                swa_start_frac=swa_start_frac,
+            )
+
+        proto = augmentation_cfg.get("test_protocol", "full_trial")
+        if proto == "crop_voting" and augmentation_cfg.get("crop_enabled", False):
+            y_pred, _ = crop_vote_logits(
+                model, X_te, augmentation_cfg, device,
+                batch_size=train_cfg["batch_size"],
+            )
+            y_true = y_te
+        else:
+            y_true, y_pred = _predict(model, test_loader, device)
+        test_acc, test_kappa, test_per_class = compute_metrics(y_true, y_pred, n_classes)
+        cm = _confusion_matrix(y_true, y_pred, n_classes)
+        elapsed = time.time() - t0
+        per_subj[heldout] = {
+            "acc": float(test_acc),
+            "acc_std": 0.0,
+            "kappa": float(test_kappa),
+            "kappa_std": 0.0,
+            "per_class": test_per_class.tolist(),
+            "confusion_matrix": cm.tolist(),
+            "best_val_kappa": float(best_val_kappa),
+            "best_epoch": int(best_epoch),
+            "counts": {
+                "train": int(len(y_tr)),
+                "val": int(len(y_va)),
+                "test": int(len(y_te)),
+            },
+            "source_counts": source_counts,
+        }
+        print(
+            f"  loso {heldout}: train/val/test={len(y_tr)}/{len(y_va)}/{len(y_te)} "
+            f"acc={test_acc:.4f} kappa={test_kappa:.4f} "
+            f"val_kappa={best_val_kappa:.4f}@ep{best_epoch} (t={elapsed:.1f}s)"
+        )
+
+    return per_subj, n_classes
 
 
 def main():
@@ -620,10 +812,11 @@ def main():
                         help="if a per-fold ckpt already exists, skip training "
                              "for that fold; just load and run test forward.")
     parser.add_argument("--subject", default="all")
-    parser.add_argument("--split-mode", choices=["pooled", "subject_cv"],
+    parser.add_argument("--split-mode", choices=["pooled", "subject_cv", "loso"],
                         default="pooled",
                         help="pooled trains one model on concatenated subject splits; "
-                             "subject_cv keeps the old per-subject CV protocol.")
+                             "subject_cv keeps the old per-subject CV protocol; "
+                             "loso leaves one subject out for cross-subject testing.")
     parser.add_argument("--n-folds", type=int, default=10)
     parser.add_argument("--train-size", type=float, default=0.7)
     parser.add_argument("--val-size", type=float, default=0.2)
@@ -668,31 +861,51 @@ def main():
             subjects, train_cfg, augmentation_cfg, args, device
         )
         per_subj["POOLED"] = out
+    elif args.split_mode == "loso":
+        per_subj, n_classes_seen = run_loso_subjects(
+            subjects, train_cfg, augmentation_cfg, args, device
+        )
     else:
         for s in subjects:
             out, n_classes = run_one_subject(s, train_cfg, augmentation_cfg, args, device)
             n_classes_seen = n_classes
             per_subj[s] = out
 
+    if args.split_mode == "pooled":
+        split_desc = (
+            f"Train/val/test: {args.train_size:.2f}/"
+            f"{args.val_size:.2f}/{args.test_size:.2f}"
+        )
+        validation_desc = (
+            f"per-subject stratified {args.train_size:.2f}/{args.val_size:.2f}/"
+            f"{args.test_size:.2f} split; pooled train, pooled val, pooled test"
+        )
+        cv_desc = f"pooled_{args.train_size:.2f}_{args.val_size:.2f}_{args.test_size:.2f}"
+    elif args.split_mode == "loso":
+        split_desc = (
+            f"LOSO source train/val/unused: {args.train_size:.2f}/"
+            f"{args.val_size:.2f}/{args.test_size:.2f}"
+        )
+        validation_desc = (
+            "leave-one-subject-out test; source subjects use stratified "
+            f"{args.train_size:.2f}/{args.val_size:.2f}/{args.test_size:.2f} "
+            "split with the final source split unused"
+        )
+        cv_desc = "loso"
+    else:
+        split_desc = f"N folds: {args.n_folds}"
+        validation_desc = (
+            f"outer stratified {args.n_folds}-fold test; "
+            f"stratified val split from train_val"
+        )
+        cv_desc = f"{args.n_folds}fold"
+
     extra = [
         f"Preset: {args.preset}",
         f"Split mode: {args.split_mode}",
-        f"N folds: {args.n_folds}" if args.split_mode == "subject_cv"
-        else f"Train/val/test: {args.train_size:.2f}/{args.val_size:.2f}/{args.test_size:.2f}",
+        split_desc,
         f"Augmentation config: {augmentation_cfg}",
     ]
-    validation_desc = (
-        f"per-subject stratified {args.train_size:.2f}/{args.val_size:.2f}/"
-        f"{args.test_size:.2f} split; pooled train, pooled val, pooled test"
-        if args.split_mode == "pooled"
-        else f"outer stratified {args.n_folds}-fold test; "
-             f"stratified val split from train_val"
-    )
-    cv_desc = (
-        f"pooled_{args.train_size:.2f}_{args.val_size:.2f}_{args.test_size:.2f}"
-        if args.split_mode == "pooled"
-        else f"{args.n_folds}fold"
-    )
 
     summary = format_summary(
         experiment=args.exp_name, model_name=MODEL_NAME,

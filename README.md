@@ -27,22 +27,43 @@ Run the full pooled baseline training. Each subject is split 70/20/10, then
 all train, validation, and test splits are concatenated across subjects:
 
 ```bash
-uv run ./run_baseline.sh
+./run_baseline.sh
 ```
 
 Run from the copied checkpoints instead of retraining:
 
 ```bash
-uv run ./run_baseline.sh --resume
+./run_baseline.sh --resume
 ```
 
 For a quick smoke test:
 
 ```bash
-uv run ./run_baseline.sh --subject S1 --epochs 1 --num-workers 0
+./run_baseline.sh --subject S1 --epochs 1 --num-workers 0
+```
+
+Run the baseline over multiple seeds and write a mean+-std table:
+
+```bash
+./run_baseline_t7_swa_multiseed.sh
+```
+
+Analyze pooled-test weak subjects and classes after one or more pooled runs:
+
+```bash
+uv run --locked python analyze_pooled_subjects.py \
+  --runs baseline_t7_swa \
+  --out results/baseline/pooled_subject_analysis.md
+```
+
+Run a cross-subject generalization check:
+
+```bash
+./run_generalization_check.sh
+MODE=subject_cv ./run_generalization_check.sh
 ```
 
 Set `BCI_DATA_ROOT` to the directory containing `S1/`, `S2/`, ...
-if the data is not under `~/my-data`. The launchers default to `python`.
-Set `PYTHON_BIN=/path/to/python` if your environment uses a different
-executable.
+if the data is not under `~/my-data`. The launchers use `uv run --locked`
+by default. The project-level `uv.toml` and `uv.lock` point to the Tsinghua
+PyPI mirror; set `UV_INDEX_URL` if another mirror is preferred.

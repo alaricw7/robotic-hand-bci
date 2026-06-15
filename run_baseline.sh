@@ -9,9 +9,18 @@ mkdir -p logs/baseline results/baseline
 NUM_WORKERS="${NUM_WORKERS:-6}"
 TORCH_THREADS="${TORCH_THREADS:-4}"
 EXP_NAME="${EXP_NAME:-baseline_t7_swa}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+UV_BIN="${UV_BIN:-uv}"
+UV_INDEX_URL="${UV_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${UV_INDEX_URL}}"
+export UV_INDEX_URL UV_DEFAULT_INDEX
 
-"${PYTHON_BIN}" -u run_baseline.py \
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  PY_CMD=("${PYTHON_BIN}")
+else
+  PY_CMD=("${UV_BIN}" run --locked python)
+fi
+
+"${PY_CMD[@]}" -u run_baseline.py \
   --exp-name "${EXP_NAME}" \
   --preset standard_coords \
   --subject all \
