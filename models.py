@@ -11,7 +11,7 @@ def build_model(name: str, cfg):
     """Build a TriDomain classifier from a SimpleNamespace-style cfg.
 
     The TriDomain encoder needs more than (n_channels, n_times, n_classes)
-    because it consumes electrode coordinates, ablation switches, etc.,
+    because it consumes electrode coordinates and baseline switches,
     so we pass through the full cfg.
     """
     if name.lower() not in {"tridomain", "tri_domain", "tri-domain"}:

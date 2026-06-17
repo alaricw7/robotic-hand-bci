@@ -4,7 +4,9 @@ import torch
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from torch.utils.data import Dataset, DataLoader
 
-DATA_ROOT = "/home/wong/eeg/preprocessing/pythondata1"
+DATA_ROOT = os.path.abspath(os.path.expanduser(
+    os.environ.get("BCI_DATA_ROOT", os.environ.get("DATA_ROOT", "~/my-data"))
+))
 SUBJECTS = [f"S{i}" for i in range(1, 11)]
 SFREQ = 250
 TMIN = -0.5
@@ -22,7 +24,13 @@ def load_subject(subject: str, crop_mi: bool = True):
     X: float32 (n_trials, n_channels, n_times)
     y: int64   (n_trials,)
     """
-    d = np.load(_npz_path(subject), allow_pickle=True)
+    path = _npz_path(subject)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Missing data file for {subject}: {path}. "
+            "Set BCI_DATA_ROOT to the directory containing S1/, S2/, ... if needed."
+        )
+    d = np.load(path, allow_pickle=True)
     X = d["X"].astype(np.float32)
     y = d["y"].astype(np.int64)
     if crop_mi:
@@ -74,6 +82,49 @@ def chronological_per_class_train_val_test_split(y: np.ndarray, test_size: float
     return (np.sort(np.asarray(train_idx, dtype=np.int64)),
             np.sort(np.asarray(val_idx, dtype=np.int64)),
             np.sort(np.asarray(test_idx, dtype=np.int64)))
+
+
+def stratified_train_val_test_split(
+    y: np.ndarray,
+    train_size: float = 0.7,
+    val_size: float = 0.2,
+    test_size: float = 0.1,
+    seed: int = 42,
+):
+    """Return one stratified random train/val/test split.
+
+    The ratios are fractions of the full subject dataset. This is used by the
+    pooled-subject protocol: split each subject the same way, then concatenate
+    all train, all val, and all test samples across subjects.
+    """
+    total = float(train_size) + float(val_size) + float(test_size)
+    if not np.isclose(total, 1.0):
+        raise ValueError(
+            f"train/val/test sizes must sum to 1.0, got {total:.6f}"
+        )
+    if min(train_size, val_size, test_size) <= 0:
+        raise ValueError("train_size, val_size, and test_size must all be positive")
+
+    indices = np.arange(len(y), dtype=np.int64)
+    holdout_size = val_size + test_size
+    train_idx, holdout_idx = train_test_split(
+        indices,
+        test_size=holdout_size,
+        stratify=y,
+        random_state=seed,
+    )
+    test_frac_of_holdout = test_size / holdout_size
+    val_idx, test_idx = train_test_split(
+        holdout_idx,
+        test_size=test_frac_of_holdout,
+        stratify=y[holdout_idx],
+        random_state=seed + 1,
+    )
+    return (
+        np.sort(train_idx.astype(np.int64)),
+        np.sort(val_idx.astype(np.int64)),
+        np.sort(test_idx.astype(np.int64)),
+    )
 
 
 def stratified_kfold_train_val_test_splits(

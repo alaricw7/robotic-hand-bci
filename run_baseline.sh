@@ -4,18 +4,30 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-mkdir -p logs_task56 results/aug_hpo
+mkdir -p logs/baseline results/baseline
 
 NUM_WORKERS="${NUM_WORKERS:-6}"
 TORCH_THREADS="${TORCH_THREADS:-4}"
-EXP_NAME="${EXP_NAME:-abl_S5_S_swa}"
-PYTHON_BIN="${PYTHON_BIN:-/mnt/disk/soeeg/miniconda3/envs/eeg_env/bin/python}"
+EXP_NAME="${EXP_NAME:-baseline_t7_swa}"
+UV_BIN="${UV_BIN:-uv}"
+UV_INDEX_URL="${UV_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${UV_INDEX_URL}}"
+export UV_INDEX_URL UV_DEFAULT_INDEX
 
-"${PYTHON_BIN}" -u run_aug.py \
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  PY_CMD=("${PYTHON_BIN}")
+else
+  PY_CMD=("${UV_BIN}" run --locked python)
+fi
+
+"${PY_CMD[@]}" -u run_baseline.py \
   --exp-name "${EXP_NAME}" \
-  --ablation full_std_coords \
+  --preset standard_coords \
   --subject all \
-  --n-folds 10 \
+  --split-mode pooled \
+  --train-size 0.7 \
+  --val-size 0.2 \
+  --test-size 0.1 \
   --epochs 200 \
   --save-ckpts \
   --torch-threads "${TORCH_THREADS}" \
